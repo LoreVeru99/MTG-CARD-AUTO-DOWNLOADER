@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MTG Image Downloader</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d120f;
+      color: #f5f7f5;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: #0d120f;
+    }
+
+    main {
+      width: min(620px, 100%);
+      padding: 24px;
+      border: 1px solid #303a34;
+      border-radius: 16px;
+      background: #131a16;
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 1.25rem;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: .9rem;
+      font-weight: 650;
+    }
+
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: 300px;
+      resize: vertical;
+      padding: 14px;
+      border: 1px solid #3a463e;
+      border-radius: 10px;
+      background: #0d120f;
+      color: #fff;
+      font: 1rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    textarea:focus,
+    button:focus-visible {
+      outline: 3px solid #a8ff60;
+      outline-offset: 2px;
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 14px 0;
+      font-size: .9rem;
+      font-weight: 500;
+    }
+
+    .check input {
+      width: 18px;
+      height: 18px;
+      accent-color: #a8ff60;
+    }
+
+    button {
+      display: block;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 10px;
+      border: 1px solid #3a463e;
+      border-radius: 10px;
+      background: #0d120f;
+      color: #fff;
+      font: inherit;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: #a8ff60;
+      background: #a8ff60;
+      color: #071005;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: .55;
+    }
+
+    .folder,
+    .status {
+      margin: 10px 0 0;
+      color: #bdc7c0;
+      font-size: .86rem;
+      overflow-wrap: anywhere;
+    }
+
+    progress {
+      display: block;
+      width: 100%;
+      height: 12px;
+      margin-top: 14px;
+      accent-color: #a8ff60;
+    }
+
+    .status.error { color: #ff8b82; }
+    .status.success { color: #a8ff60; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body data-build="parallel-v4.0.0">
+  <main>
+    <h1>MTG Image Downloader</h1>
+
+    <label for="cardNames">Carte (una per riga)</label>
+    <textarea id="cardNames" spellcheck="false" autocomplete="off"></textarea>
+
+    <label class="check">
+      <input id="allFaces" type="checkbox" checked>
+      <span>Scarica tutte le facce delle carte bifronte</span>
+    </label>
+
+    <button id="selectFolder" type="button">1. Seleziona cartella</button>
+    <p id="folderStatus" class="folder">Nessuna cartella selezionata</p>
+
+    <button id="download" class="primary" type="button">2. Scarica carte</button>
+    <progress id="progress" value="0" max="1" hidden></progress>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const COLLECTION_URL = "https://api.scryfall.com/cards/collection";
+      const COLLECTION_BATCH_SIZE = 75;
+      const COLLECTION_INTERVAL_MS = 550;
+      const DOWNLOAD_CONCURRENCY = 6;
+      const MAX_IMAGE_ATTEMPTS = 3;
+      const IMAGE_TIMEOUT_MS = 45000;
+
+      const ui = {
+        cardNames: document.getElementById("cardNames"),
+        allFaces: document.getElementById("allFaces"),
+        selectFolder: document.getElementById("selectFolder"),
+        folderStatus: document.getElementById("folderStatus"),
+        download: document.getElementById("download"),
+        progress: document.getElementById("progress"),
+        status: document.getElementById("status")
+      };
+
+      let directoryHandle = null;
+      let busy = false;
+
+      const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+      function setStatus(message, kind = "") {
+        ui.status.textContent = message;
+        ui.status.className = `status${kind ? ` ${kind}` : ""}`;
+      }
+
+      function setBusy(value) {
+        busy = value;
+        ui.selectFolder.disabled = value;
+        ui.download.disabled = value;
+        ui.cardNames.disabled = value;
+        ui.allFaces.disabled = value;
+      }
+
+      function parseCardNames(text) {
+        const ignoredHeadings = /^(deck|sideboard|commander|companion)$/i;
+        const seen = new Set();
+        const names = [];
+
+        for (const sourceLine of text.split(/\r?\n/)) {
+          let name = sourceLine.trim();
+          if (!name || ignoredHeadings.test(name)) continue;
+
+          name = name
+            .replace(/^[-•]\s*/, "")
+            .replace(/^\d{1,3}\s*[xX]\s+/, "")
+            .replace(/^\d{1,3}\s+/, "")
+            .replace(/\s+\([A-Z0-9]{2,8}\)\s+[A-Z0-9★-]+(?:\s+\*F\*)?$/i, "")
+            .trim();
+
+          if (!name) continue;
+          const key = name.toLocaleLowerCase("en-US");
+          if (!seen.has(key)) {
+            seen.add(key);
+            names.push(name);
+          }
+        }
+
+        return names;
+      }
+
+      function chunk(items, size) {
+        const chunks = [];
+        for (let i = 0; i < items.length; i += size) {
+          chunks.push(items.slice(i, i + size));
+        }
+        return chunks;
+      }
+
+      async function fetchCollection(names, options = {}) {
+        const fetchImpl = options.fetchImpl || fetch;
+        const intervalMs = options.intervalMs ?? COLLECTION_INTERVAL_MS;
+        const batches = chunk(names, COLLECTION_BATCH_SIZE);
+        const cards = [];
+        const notFound = [];
+
+        for (let i = 0; i < batches.length; i += 1) {
+          if (i > 0 && intervalMs > 0) await sleep(intervalMs);
+
+          const response = await fetchImpl(COLLECTION_URL, {
+            method: "POST",
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              identifiers: batches[i].map(name => ({ name }))
+            })
+          });
+
+          if (!response.ok) {
+            let apiMessage = "";
+            try {
+              const problem = await response.json();
+              apiMessage = problem.details || problem.code || "";
+            } catch (_) {
+              // The HTTP status below is enough when the body is not JSON.
+            }
+            throw new Error(`Scryfall: ${apiMessage || `errore HTTP ${response.status}`}`);
+          }
+
+          const result = await response.json();
+          cards.push(...(Array.isArray(result.data) ? result.data : []));
+          notFound.push(...(Array.isArray(result.not_found) ? result.not_found : []));
+        }
+
+        return { cards, notFound };
+      }
+
+      function safeFileStem(value) {
+        let stem = String(value || "carta")
+          .normalize("NFKC")
+          .replace(/[\\/:*?"<>|\u0000-\u001F]+/g, " - ")
+          .replace(/\s+/g, " ")
+          .replace(/[. ]+$/g, "")
+          .trim();
+
+        if (!stem) stem = "carta";
+        if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem)) stem = `_${stem}`;
+        return stem.slice(0, 170).replace(/[. ]+$/g, "") || "carta";
+      }
+
+      function makeUniqueFilename(stem, reservedNames) {
+        const cleanStem = safeFileStem(stem);
+        let candidate = `${cleanStem}.png`;
+        let suffix = 2;
+
+        while (reservedNames.has(candidate.toLocaleLowerCase("en-US"))) {
+          candidate = `${cleanStem} (${suffix}).png`;
+          suffix += 1;
+        }
+
+        reservedNames.add(candidate.toLocaleLowerCase("en-US"));
+        return candidate;
+      }
+
+      function buildImageTasks(cards, downloadAllFaces) {
+        const tasks = [];
+        const reservedNames = new Set();
+
+        for (const card of cards) {
+          if (card?.image_uris?.png) {
+            tasks.push({
+              cardName: card.name || "Carta",
+              filename: makeUniqueFilename(card.name, reservedNames),
+              url: card.image_uris.png
+            });
+            continue;
+          }
+
+          const faces = Array.isArray(card?.card_faces)
+            ? card.card_faces.filter(face => face?.image_uris?.png)
+            : [];
+          const selectedFaces = downloadAllFaces ? faces : faces.slice(0, 1);
+
+          selectedFaces.forEach((face, index) => {
+            const faceName = face.name || `${card.name || "Carta"} - faccia ${index + 1}`;
+            tasks.push({
+              cardName: faceName,
+              filename: makeUniqueFilename(faceName, reservedNames),
+              url: face.image_uris.png
+            });
+          });
+        }
+
+        return tasks;
+      }
+
+      function retryDelay(attempt, response) {
+        const retryAfter = Number(response?.headers?.get?.("Retry-After"));
+        if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1000;
+        return 500 * (2 ** (attempt - 1));
+      }
+
+      async function fetchImageBlob(url, options = {}) {
+        const fetchImpl = options.fetchImpl || fetch;
+        const attempts = options.attempts ?? MAX_IMAGE_ATTEMPTS;
+        const timeoutMs = options.timeoutMs ?? IMAGE_TIMEOUT_MS;
+        let lastError;
+
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+          try {
+            const response = await fetchImpl(url, {
+              method: "GET",
+              mode: "cors",
+              cache: "force-cache",
+              signal: controller.signal
+            });
+
+            if (!response.ok) {
+              const error = new Error(`HTTP ${response.status}`);
+              error.retryable = response.status === 429 || response.status >= 500;
+              error.response = response;
+              throw error;
+            }
+
+            const blob = await response.blob();
+            if (!blob || blob.size === 0) throw new Error("immagine vuota");
+            return blob;
+          } catch (error) {
+            lastError = error;
+            const retryable = error.name === "AbortError" || error.retryable !== false;
+            if (!retryable || attempt === attempts) break;
+            await sleep(retryDelay(attempt, error.response));
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+
+        throw lastError || new Error("download non riuscito");
+      }
+
+      async function writeBlob(directory, filename, blob) {
+        const fileHandle = await directory.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        try {
+          await writable.write(blob);
+        } finally {
+          await writable.close();
+        }
+      }
+
+      async function downloadOne(task, directory, options = {}) {
+        const blob = await fetchImageBlob(task.url, options);
+        await writeBlob(directory, task.filename, blob);
+      }
+
+      async function runDownloadPool(tasks, directory, options = {}) {
+        const concurrency = Math.max(1, Math.min(options.concurrency || DOWNLOAD_CONCURRENCY, tasks.length || 1));
+        const onProgress = options.onProgress || (() => {});
+        const fetchImpl = options.fetchImpl || fetch;
+        const results = new Array(tasks.length);
+        let cursor = 0;
+        let completed = 0;
+
+        async function worker() {
+          while (true) {
+            const index = cursor;
+            cursor += 1;
+            if (index >= tasks.length) return;
+
+            const task = tasks[index];
+            try {
+              await downloadOne(task, directory, { fetchImpl });
+              results[index] = { ok: true, task };
+            } catch (error) {
+              results[index] = { ok: false, task, error };
+            } finally {
+              completed += 1;
+              onProgress(completed, tasks.length, results[index]);
+            }
+          }
+        }
+
+        await Promise.all(Array.from({ length: concurrency }, () => worker()));
+        return results;
+      }
+
+      async function ensureWritePermission(handle) {
+        const options = { mode: "readwrite" };
+        if (typeof handle.queryPermission === "function") {
+          const current = await handle.queryPermission(options);
+          if (current === "granted") return true;
+        }
+        if (typeof handle.requestPermission === "function") {
+          return (await handle.requestPermission(options)) === "granted";
+        }
+        return true;
+      }
+
+      function notFoundName(item) {
+        if (typeof item === "string") return item;
+        return item?.name || item?.collector_number || "Carta sconosciuta";
+      }
+
+      async function selectFolder() {
+        if (busy) return;
+        if (typeof window.showDirectoryPicker !== "function") {
+          setStatus("Selezione cartella non supportata: usa Chrome o Edge aggiornato.", "error");
+          return;
+        }
+
+        try {
+          const selected = await window.showDirectoryPicker({
+            id: "mtg-image-downloader-output",
+            mode: "readwrite"
+          });
+          directoryHandle = selected;
+          ui.folderStatus.textContent = `Cartella: ${selected.name}`;
+          setStatus("");
+        } catch (error) {
+          if (error?.name !== "AbortError") {
+            setStatus(`Cartella non accessibile: ${error.message || error}`, "error");
+          }
+        }
+      }
+
+      async function startDownload() {
+        if (busy) return;
+        const names = parseCardNames(ui.cardNames.value);
+
+        if (names.length === 0) {
+          setStatus("Inserisci almeno una carta.", "error");
+          return;
+        }
+        if (!directoryHandle) {
+          setStatus("Seleziona prima la cartella.", "error");
+          return;
+        }
+
+        setBusy(true);
+        ui.progress.hidden = false;
+        ui.progress.max = 1;
+        ui.progress.value = 0;
+
+        try {
+          if (!(await ensureWritePermission(directoryHandle))) {
+            throw new Error("permesso di scrittura negato");
+          }
+
+          setStatus(`Ricerca di ${names.length} carte…`);
+          const { cards, notFound } = await fetchCollection(names);
+          const tasks = buildImageTasks(cards, ui.allFaces.checked);
+
+          if (tasks.length === 0) {
+            const missing = notFound.map(notFoundName);
+            throw new Error(missing.length ? `nessuna carta trovata: ${missing.join(", ")}` : "nessuna immagine PNG disponibile");
+          }
+
+          ui.progress.max = tasks.length;
+          setStatus(`Download parallelo: 0/${tasks.length} PNG…`);
+
+          const results = await runDownloadPool(tasks, directoryHandle, {
+            concurrency: DOWNLOAD_CONCURRENCY,
+            onProgress(done, total) {
+              ui.progress.value = done;
+              setStatus(`Download parallelo: ${done}/${total} PNG…`);
+            }
+          });
+
+          const succeeded = results.filter(result => result.ok).length;
+          const failed = results.filter(result => !result.ok);
+          const missing = notFound.map(notFoundName);
+          const details = [];
+
+          if (missing.length) details.push(`Non trovate: ${missing.join(", ")}`);
+          if (failed.length) details.push(`Errori: ${failed.map(result => result.task.cardName).join(", ")}`);
+
+          if (failed.length || missing.length) {
+            setStatus(`${succeeded} PNG salvati. ${details.join(" — ")}`, failed.length ? "error" : "");
+          } else {
+            setStatus(`${succeeded} PNG salvati.`, "success");
+          }
+        } catch (error) {
+          setStatus(`Download interrotto: ${error.message || error}`, "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      ui.selectFolder.addEventListener("click", selectFolder);
+      ui.download.addEventListener("click", startDownload);
+
+      window.__MTG_TEST__ = {
+        parseCardNames,
+        chunk,
+        fetchCollection,
+        safeFileStem,
+        buildImageTasks,
+        fetchImageBlob,
+        runDownloadPool
+      };
+    })();
+  </script>
+</body>
+</html>
