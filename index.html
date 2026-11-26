@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MTG Image Downloader</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f0c;
+      --panel: #131814;
+      --field: #0d120f;
+      --line: #303a32;
+      --text: #f4f7f4;
+      --muted: #aab6ad;
+      --green: #adff5f;
+      --green-dark: #82d637;
+      --red: #ff7979;
+      --yellow: #ffd36a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(760px, calc(100% - 28px));
+      margin: 28px auto;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    h1 { margin: 0; font-size: 22px; }
+    #version { color: var(--muted); font-size: 13px; }
+
+    label, .section-label {
+      display: block;
+      margin: 0 0 7px;
+      font-weight: 700;
+    }
+
+    textarea, input, select, button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      font: inherit;
+    }
+
+    textarea, input, select {
+      background: var(--field);
+      color: var(--text);
+    }
+
+    textarea {
+      min-height: 230px;
+      resize: vertical;
+      padding: 13px;
+    }
+
+    input, select { min-height: 44px; padding: 9px 11px; }
+    select { min-height: 160px; }
+
+    button {
+      min-height: 47px;
+      padding: 10px 14px;
+      background: var(--field);
+      color: var(--text);
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) { border-color: var(--green); }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--green) 48%, transparent);
+      outline-offset: 2px;
+    }
+
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    .primary { background: var(--green); border-color: var(--green); color: #071000; }
+    .primary:hover:not(:disabled) { background: var(--green-dark); border-color: var(--green-dark); }
+
+    .block { margin-top: 21px; }
+    .set-grid { display: grid; grid-template-columns: 1fr 128px; gap: 9px; }
+    .set-grid input, .set-grid select { grid-column: 1; }
+    .set-grid select { grid-row: 2; }
+    .set-grid button { grid-column: 2; grid-row: 2; align-self: end; }
+
+    #preferred-list {
+      list-style: none;
+      margin: 9px 0 0;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      overflow: hidden;
+    }
+
+    .preferred-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 48px;
+      padding: 7px 9px 7px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .preferred-item:last-child { border-bottom: 0; }
+    .preferred-label { overflow-wrap: anywhere; }
+    .preferred-controls { display: flex; gap: 5px; flex: 0 0 auto; }
+
+    .icon-button {
+      width: 36px;
+      min-height: 34px;
+      padding: 0;
+      border-radius: 7px;
+    }
+
+    .empty { padding: 13px; color: var(--muted); }
+    .folder-status { min-height: 22px; margin: 8px 0 0; color: var(--muted); }
+
+    progress {
+      width: 100%;
+      height: 13px;
+      margin-top: 14px;
+      accent-color: var(--green);
+    }
+
+    .status {
+      min-height: 22px;
+      margin-top: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+    }
+
+    .status.error { color: var(--red); }
+    .status.warning { color: var(--yellow); }
+    .status.success { color: var(--green); }
+
+    .rule {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 560px) {
+      main { width: 100%; margin: 0; min-height: 100vh; border: 0; border-radius: 0; padding: 20px 16px; }
+      .set-grid { grid-template-columns: 1fr; }
+      .set-grid input, .set-grid select, .set-grid button { grid-column: 1; grid-row: auto; }
+      .set-grid select { min-height: 150px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>MTG Image Downloader</h1>
+      <span id="version"></span>
+    </header>
+
+    <label for="cards">Carte (una per riga)</label>
+    <textarea id="cards" spellcheck="false" autocomplete="off" placeholder="Sol Ring&#10;Lightning Bolt&#10;Delver of Secrets"></textarea>
+
+    <section class="block" aria-labelledby="preferred-heading">
+      <div class="section-label" id="preferred-heading">Espansioni preferite</div>
+      <div class="set-grid">
+        <input id="set-filter" type="search" placeholder="Filtra per nome o codice" aria-label="Filtra espansioni">
+        <select id="set-select" size="7" aria-label="Espansioni disponibili"></select>
+        <button id="add-set" type="button">Aggiungi</button>
+      </div>
+      <ol id="preferred-list" aria-label="Ordine espansioni preferite"></ol>
+      <p class="rule">Nell’espansione preferita viene scelta la versione non full art, se disponibile.</p>
+    </section>
+
+    <section class="block">
+      <button id="select-folder" type="button">1. Seleziona cartella</button>
+      <p id="folder-status" class="folder-status">Nessuna cartella selezionata</p>
+    </section>
+
+    <section class="block">
+      <button id="download" class="primary" type="button" disabled>2. Scarica carte</button>
+      <progress id="progress" value="0" max="1" hidden></progress>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <script>
+/* MTG Image Downloader v6.1 */
+(function () {
+  'use strict';
+
+  const APP_VERSION = '6.1';
+  const API_ROOT = 'https://api.scryfall.com';
+  const STORAGE_PREFERRED = 'mtgDownloaderPreferredSetsV6';
+  const STORAGE_SET_CACHE = 'mtgDownloaderSetCacheV6';
+  const LOOKUP_CONCURRENCY = 4;
+  const DOWNLOAD_CONCURRENCY = 6;
+  const API_INTERVAL_MS = 110;
+
+  function dateValue(card) {
+    const parsed = Date.parse(card && card.released_at ? card.released_at : '');
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function newestFirst(a, b) {
+    const dateDifference = dateValue(b) - dateValue(a);
+    if (dateDifference) return dateDifference;
+    const numberDifference = String(a.collector_number || '').localeCompare(
+      String(b.collector_number || ''),
+      undefined,
+      { numeric: true, sensitivity: 'base' }
+    );
+    if (numberDifference) return numberDifference;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  }
+
+  function hasPng(card) {
+    if (!card) return false;
+    if (card.image_uris && card.image_uris.png) return true;
+    return Array.isArray(card.card_faces) && card.card_faces.some(
+      (face) => face && face.image_uris && face.image_uris.png
+    );
+  }
+
+  /**
+   * Selection order:
+   * 1. First preferred set containing the card.
+   * 2. Within that set, prefer non-full-art if both kinds exist.
+   * 3. Within the chosen kind, use the most recent printing/variant.
+   * 4. If no preferred set matches, keep v6 behavior: newest PNG printing.
+   */
+  function choosePrinting(printings, preferredSetCodes) {
+    const usable = (Array.isArray(printings) ? printings : [])
+      .filter(hasPng)
+      .slice()
+      .sort(newestFirst);
+
+    const preferred = Array.isArray(preferredSetCodes) ? preferredSetCodes : [];
+    for (const rawCode of preferred) {
+      const code = String(rawCode || '').toLowerCase();
+      const inPreferredSet = usable.filter(
+        (card) => String(card.set || '').toLowerCase() === code
+      );
+      if (!inPreferredSet.length) continue;
+
+      const nonFullArt = inPreferredSet.filter((card) => card.full_art !== true);
+      return (nonFullArt.length ? nonFullArt : inPreferredSet).slice().sort(newestFirst)[0];
+    }
+
+    return usable[0] || null;
+  }
+
+  function parseCardLines(text) {
+    const seen = new Set();
+    const cards = [];
+    for (const rawLine of String(text || '').split(/\r?\n/)) {
+      let line = rawLine.trim();
+      if (!line || /^\s*(#|\/\/)/.test(line)) continue;
+      if (/^(deck|mainboard|sideboard|commander|companion|maybeboard)\s*:??\s*$/i.test(line)) continue;
+
+      line = line
+        .replace(/^\s*\d+\s*[xX]?\s+/, '')
+        .replace(/\s+\([A-Za-z0-9]{2,8}\)\s+[A-Za-z0-9*-]+\s*$/, '')
+        .replace(/\s+\[[A-Za-z0-9]{2,8}:[A-Za-z0-9*-]+\]\s*$/, '')
+        .trim();
+
+      if (!line) continue;
+      const key = line.toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cards.push(line);
+    }
+    return cards;
+  }
+
+  function safeFilename(value) {
+    const cleaned = String(value || '')
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+      .replace(/[. ]+$/g, '')
+      .trim();
+    return (cleaned || 'card').slice(0, 180);
+  }
+
+  function imageJobsForCard(card, requestedName) {
+    const base = safeFilename(requestedName || card.name || 'card');
+    const faces = Array.isArray(card.card_faces)
+      ? card.card_faces.filter((face) => face && face.image_uris && face.image_uris.png)
+      : [];
+
+    if (faces.length) {
+      return faces.map((face, index) => ({
+        url: face.image_uris.png,
+        filename: `${base} - ${index + 1} - ${safeFilename(face.name || `faccia ${index + 1}`)}.png`
+      }));
+    }
+
+    if (card.image_uris && card.image_uris.png) {
+      return [{ url: card.image_uris.png, filename: `${base}.png` }];
+    }
+
+    return [];
+  }
+
+  const core = {
+    choosePrinting,
+    parseCardLines,
+    safeFilename,
+    imageJobsForCard,
+    newestFirst,
+    hasPng
+  };
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = core;
+  }
+
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+  const elements = {
+    cards: document.getElementById('cards'),
+    setFilter: document.getElementById('set-filter'),
+    setSelect: document.getElementById('set-select'),
+    addSet: document.getElementById('add-set'),
+    preferredList: document.getElementById('preferred-list'),
+    selectFolder: document.getElementById('select-folder'),
+    download: document.getElementById('download'),
+    folderStatus: document.getElementById('folder-status'),
+    status: document.getElementById('status'),
+    progress: document.getElementById('progress'),
+    version: document.getElementById('version')
+  };
+
+  const folderPickerSupported = window.isSecureContext && typeof window.showDirectoryPicker === 'function';
+  let directoryHandle = null;
+  let allSets = [];
+  let preferredCodes = loadJson(STORAGE_PREFERRED, []);
+  let apiQueue = Promise.resolve();
+  let lastApiStart = 0;
+
+  elements.version.textContent = `v${APP_VERSION}`;
+
+  function loadJson(key, fallback) {
+    try {
+      const value = JSON.parse(localStorage.getItem(key));
+      return value == null ? fallback : value;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function saveJson(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (_) {
+      // The app still works if storage is unavailable.
+    }
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function scheduleApiRequest(url, options) {
+    const run = async () => {
+      const wait = Math.max(0, API_INTERVAL_MS - (Date.now() - lastApiStart));
+      if (wait) await sleep(wait);
+      lastApiStart = Date.now();
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        let detail = '';
+        try {
+          const body = await response.json();
+          detail = body.details || body.code || '';
+        } catch (_) {
+          // Ignore non-JSON error bodies.
+        }
+        throw new Error(detail || `HTTP ${response.status}`);
+      }
+      return response;
+    };
+
+    const scheduled = apiQueue.then(run, run);
+    apiQueue = scheduled.catch(() => {});
+    return scheduled;
+  }
+
+  async function fetchJson(url, attempts = 3) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await scheduleApiRequest(url, {
+          headers: { Accept: 'application/json' }
+        });
+        return await response.json();
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) await sleep(350 * attempt);
+      }
+    }
+    throw lastError;
+  }
+
+  async function loadSets() {
+    setStatus('Caricamento espansioni…');
+    try {
+      const payload = await fetchJson(`${API_ROOT}/sets`);
+      allSets = (payload.data || [])
+        .filter((set) => set && set.code && set.name && Number(set.card_count || 0) > 0)
+        .sort((a, b) => {
+          const byDate = String(b.released_at || '').localeCompare(String(a.released_at || ''));
+          return byDate || String(a.name).localeCompare(String(b.name));
+        });
+      saveJson(STORAGE_SET_CACHE, allSets);
+      if (folderPickerSupported) setStatus('');
+    } catch (error) {
+      allSets = loadJson(STORAGE_SET_CACHE, []);
+      if (allSets.length) {
+        setStatus('Elenco espansioni caricato dalla cache.', 'warning');
+      } else {
+        setStatus(`Impossibile caricare le espansioni: ${error.message}`, 'error');
+      }
+    }
+
+    const validCodes = new Set(allSets.map((set) => set.code));
+    preferredCodes = preferredCodes.filter((code) => validCodes.has(code));
+    saveJson(STORAGE_PREFERRED, preferredCodes);
+    renderSetOptions();
+    renderPreferred();
+  }
+
+  function renderSetOptions() {
+    const query = elements.setFilter.value.trim().toLocaleLowerCase();
+    const selected = elements.setSelect.value;
+    elements.setSelect.replaceChildren();
+
+    const available = allSets.filter((set) => {
+      if (preferredCodes.includes(set.code)) return false;
+      if (!query) return true;
+      return `${set.name} ${set.code}`.toLocaleLowerCase().includes(query);
+    });
+
+    for (const set of available) {
+      const option = document.createElement('option');
+      option.value = set.code;
+      option.textContent = `${set.name} (${set.code.toUpperCase()})`;
+      elements.setSelect.appendChild(option);
+    }
+
+    if (available.some((set) => set.code === selected)) elements.setSelect.value = selected;
+    elements.addSet.disabled = !available.length;
+  }
+
+  function renderPreferred() {
+    elements.preferredList.replaceChildren();
+    if (!preferredCodes.length) {
+      const empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = 'Nessuna espansione preferita';
+      elements.preferredList.appendChild(empty);
+      return;
+    }
+
+    preferredCodes.forEach((code, index) => {
+      const set = allSets.find((item) => item.code === code);
+      const item = document.createElement('li');
+      item.className = 'preferred-item';
+
+      const label = document.createElement('span');
+      label.className = 'preferred-label';
+      label.textContent = `${index + 1}. ${set ? set.name : code.toUpperCase()}`;
+
+      const controls = document.createElement('span');
+      controls.className = 'preferred-controls';
+      controls.append(
+        iconButton('↑', 'Sposta su', index === 0, () => movePreferred(index, -1)),
+        iconButton('↓', 'Sposta giù', index === preferredCodes.length - 1, () => movePreferred(index, 1)),
+        iconButton('×', 'Rimuovi', false, () => removePreferred(index))
+      );
+
+      item.append(label, controls);
+      elements.preferredList.appendChild(item);
+    });
+  }
+
+  function iconButton(text, label, disabled, handler) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'icon-button';
+    button.textContent = text;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.disabled = disabled;
+    button.addEventListener('click', handler);
+    return button;
+  }
+
+  function persistPreferred() {
+    saveJson(STORAGE_PREFERRED, preferredCodes);
+    renderSetOptions();
+    renderPreferred();
+  }
+
+  function movePreferred(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= preferredCodes.length) return;
+    [preferredCodes[index], preferredCodes[target]] = [preferredCodes[target], preferredCodes[index]];
+    persistPreferred();
+  }
+
+  function removePreferred(index) {
+    preferredCodes.splice(index, 1);
+    persistPreferred();
+  }
+
+  function setStatus(message, kind = '') {
+    elements.status.className = kind ? `status ${kind}` : 'status';
+    elements.status.textContent = message;
+  }
+
+  function setBusy(busy) {
+    elements.selectFolder.disabled = busy || !folderPickerSupported;
+    elements.download.disabled = busy || !directoryHandle;
+    elements.addSet.disabled = busy || !elements.setSelect.options.length;
+    elements.cards.disabled = busy;
+    elements.setFilter.disabled = busy;
+    elements.setSelect.disabled = busy;
+    elements.progress.hidden = !busy;
+    if (!busy) elements.progress.value = 0;
+  }
+
+  async function ensureDirectoryPermission(handle) {
+    const options = { mode: 'readwrite' };
+    if ((await handle.queryPermission(options)) === 'granted') return true;
+    return (await handle.requestPermission(options)) === 'granted';
+  }
+
+  async function selectFolder() {
+    if (!folderPickerSupported) {
+      setStatus('Selezione cartella non supportata. Usa Chrome o Edge tramite HTTPS.', 'error');
+      return;
+    }
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      if (!(await ensureDirectoryPermission(handle))) {
+        throw new Error('permesso di scrittura non concesso');
+      }
+      directoryHandle = handle;
+      elements.folderStatus.textContent = `Cartella: ${handle.name}`;
+      elements.download.disabled = false;
+      setStatus('');
+    } catch (error) {
+      if (error && error.name === 'AbortError') return;
+      directoryHandle = null;
+      elements.folderStatus.textContent = 'Nessuna cartella selezionata';
+      elements.download.disabled = true;
+      setStatus(`Cartella non selezionata: ${error.message}`, 'error');
+    }
+  }
+
+  function escapeSearchName(name) {
+    return String(name).replace(/([\\"])/g, '\\$1');
+  }
+
+  async function fetchAllPrintings(name) {
+    let url = `${API_ROOT}/cards/search?unique=prints&order=released&dir=desc&include_extras=true&q=${encodeURIComponent(`!\"${escapeSearchName(name)}\" game:paper`)}`;
+    const printings = [];
+
+    while (url) {
+      const payload = await fetchJson(url);
+      printings.push(...(payload.data || []));
+      url = payload.has_more ? payload.next_page : null;
+    }
+
+    return printings;
+  }
+
+  async function mapPool(items, concurrency, worker, onProgress) {
+    const results = new Array(items.length);
+    let cursor = 0;
+    let completed = 0;
+
+    async function runner() {
+      while (true) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= items.length) return;
+        try {
+          results[index] = await worker(items[index], index);
+        } catch (error) {
+          results[index] = { error };
+        }
+        completed += 1;
+        if (onProgress) onProgress(completed, items.length);
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, runner));
+    return results;
+  }
+
+  async function fetchImage(url, attempts = 3) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await fetch(url, { cache: 'force-cache' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.blob();
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) await sleep(500 * attempt);
+      }
+    }
+    throw lastError;
+  }
+
+  async function writeImage(job) {
+    const blob = await fetchImage(job.url);
+    const fileHandle = await directoryHandle.getFileHandle(job.filename, { create: true });
+    const writable = await fileHandle.createWritable();
+    try {
+      await writable.write(blob);
+    } finally {
+      await writable.close();
+    }
+    return job;
+  }
+
+  function uniqueFilenames(jobs) {
+    const counts = new Map();
+    return jobs.map((job) => {
+      const key = job.filename.toLocaleLowerCase();
+      const current = counts.get(key) || 0;
+      counts.set(key, current + 1);
+      if (!current) return job;
+      const filename = job.filename.replace(/\.png$/i, ` (${current + 1}).png`);
+      return { ...job, filename };
+    });
+  }
+
+  async function downloadCards() {
+    const names = parseCardLines(elements.cards.value);
+    if (!names.length) {
+      setStatus('Inserisci almeno una carta.', 'error');
+      return;
+    }
+    if (!directoryHandle) {
+      setStatus('Seleziona prima la cartella.', 'error');
+      return;
+    }
+
+    try {
+      if (!(await ensureDirectoryPermission(directoryHandle))) {
+        throw new Error('permesso di scrittura non concesso');
+      }
+
+      setBusy(true);
+      elements.progress.max = names.length;
+      elements.progress.value = 0;
+      setStatus(`Ricerca: 0/${names.length}`);
+
+      const choices = await mapPool(
+        names,
+        LOOKUP_CONCURRENCY,
+        async (name) => {
+          try {
+            const printings = await fetchAllPrintings(name);
+            const card = choosePrinting(printings, preferredCodes);
+            if (!card) throw new Error('nessuna stampa PNG trovata');
+            return { name, card };
+          } catch (error) {
+            return { name, error };
+          }
+        },
+        (done, total) => {
+          elements.progress.value = done;
+          setStatus(`Ricerca: ${done}/${total}`);
+        }
+      );
+
+      const lookupErrors = choices.filter((choice) => choice && choice.error);
+      const selected = choices.filter((choice) => choice && choice.card);
+      let jobs = selected.flatMap(({ name, card }) =>
+        imageJobsForCard(card, name).map((job) => ({ ...job, cardName: name, setName: card.set_name }))
+      );
+      jobs = uniqueFilenames(jobs);
+
+      if (!jobs.length) {
+        const detail = lookupErrors.map((item) => `${item.name}: ${item.error.message}`).join('\n');
+        throw new Error(detail || 'Nessuna immagine da scaricare');
+      }
+
+      elements.progress.max = jobs.length;
+      elements.progress.value = 0;
+      setStatus(`Download: 0/${jobs.length}`);
+
+      const downloadResults = await mapPool(
+        jobs,
+        DOWNLOAD_CONCURRENCY,
+        writeImage,
+        (done, total) => {
+          elements.progress.value = done;
+          setStatus(`Download: ${done}/${total}`);
+        }
+      );
+
+      const downloadErrors = downloadResults
+        .map((result, index) => (result && result.error ? { job: jobs[index], error: result.error } : null))
+        .filter(Boolean);
+      const saved = jobs.length - downloadErrors.length;
+      const errorLines = [
+        ...lookupErrors.map((item) => `${item.name}: ${item.error.message}`),
+        ...downloadErrors.map((item) => `${item.job.cardName}: ${item.error.message}`)
+      ];
+
+      if (errorLines.length) {
+        setStatus(`${saved} PNG salvati. Errori: ${errorLines.length}\n${errorLines.join('\n')}`, 'warning');
+      } else {
+        setStatus(`${saved} PNG salvati.`, 'success');
+      }
+    } catch (error) {
+      setStatus(`Errore: ${error.message}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  elements.setFilter.addEventListener('input', renderSetOptions);
+  elements.addSet.addEventListener('click', () => {
+    const code = elements.setSelect.value;
+    if (!code || preferredCodes.includes(code)) return;
+    preferredCodes.push(code);
+    elements.setFilter.value = '';
+    persistPreferred();
+  });
+  elements.selectFolder.addEventListener('click', selectFolder);
+  elements.download.addEventListener('click', downloadCards);
+
+  if (!folderPickerSupported) {
+    elements.selectFolder.disabled = true;
+    setStatus('Apri il sito via HTTPS con Chrome o Edge per selezionare la cartella.', 'error');
+  }
+
+  renderPreferred();
+  loadSets();
+})();
+
+  </script>
+</body>
+</html>
